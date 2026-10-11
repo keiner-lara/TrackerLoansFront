@@ -144,9 +144,29 @@ function Shell({ onLogout }: { onLogout: () => void }) {
     pushState().then(setPush)
   }, [reload])
 
-  async function pay(id: string, undo = false) {
+  const [payTarget, setPayTarget] = useState<PayTarget | null>(null)
+
+  // Un color por préstamo, según el orden en que se crearon.
+  const colors: Colors = {}
+  ;[...loans]
+    .sort((a, b) => a.startDate.localeCompare(b.startDate))
+    .forEach((l, idx) => {
+      colors[l.id] = LOAN_COLORS[idx % LOAN_COLORS.length]
+    })
+
+  async function savePay(id: string, amount: number, paidAt: string) {
     try {
-      await (undo ? api.unpay(id) : api.pay(id))
+      await api.pay(id, { amount, paidAt })
+      setPayTarget(null)
+      await reload()
+    } catch (e) {
+      fail(e)
+    }
+  }
+  async function undoPay(id: string) {
+    try {
+      await api.unpay(id)
+      setPayTarget(null)
       await reload()
     } catch (e) {
       fail(e)
@@ -201,8 +221,8 @@ function Shell({ onLogout }: { onLogout: () => void }) {
       {error && <p role="alert" className="mx-4 sm:mx-8 mb-3 text-bad text-sm">{error}</p>}
 
       <main className="px-4 sm:px-8 space-y-6">
-        {tab === 'hoy' && dash && <TodayView dash={dash} onPay={pay} />}
-        {tab === 'prestamos' && <LoansView loans={loans} onPay={pay} onDelete={async (id) => {
+        {tab === 'hoy' && dash && <TodayView dash={dash} colors={colors} onPay={setPayTarget} />}
+        {tab === 'prestamos' && <LoansView loans={loans} colors={colors} onPay={setPayTarget} onDelete={async (id) => {
           if (!confirm('¿Eliminar este préstamo y todas sus cuotas?')) return
           try { await api.deleteLoan(id); await reload() } catch (e) { fail(e) }
         }} />}
@@ -254,6 +274,7 @@ function Shell({ onLogout }: { onLogout: () => void }) {
         </div>
       </nav>
 
+      {payTarget && <PayDialog t={payTarget} onSave={savePay} onUndo={undoPay} onClose={() => setPayTarget(null)} />}
       {sheet === 'loan' && (
         <Sheet title="Nuevo préstamo" onClose={() => setSheet(null)}>
           <LoanForm
@@ -417,24 +438,136 @@ function LoanForm({
   )
 }
 
-function DueRow({ i, tone, onPay }: { i: DueItem; tone: 'bad' | 'brand' | 'mute'; onPay: (id: string) => void }) {
-  const color = tone === 'bad' ? 'text-bad' : tone === 'brand' ? 'text-brand-soft' : 'text-mute'
+/** Datos para registrar o editar el pago de una cuota. */
+interface PayTarget {
+  id: string
+  client: string
+  loanNo: number
+  principal: number
+  loanStart: string
+  number: number
+  of: number
+  amount: number
+  paidAt: string | null
+  paidAmt: number | null
+  color: string
+}
+
+type Colors = Record<string, string>
+const LOAN_COLORS = ['#2f7bff', '#9bea63', '#a263ff', '#ffb547', '#22d3ee', '#ff6b9d']
+const shortDate = (iso: string) =>
+  new Date(iso.slice(0, 10) + 'T00:00:00Z').toLocaleDateString('es-CO', { day: 'numeric', month: 'short', timeZone: 'UTC' })
+/** Fecha (Colombia) en que se registró un pago guardado como instante UTC. */
+const paidDay = (iso: string) => new Date(new Date(iso).getTime() - 5 * 3600_000).toISOString().slice(0, 10)
+
+const dueTarget = (i: DueItem, colors: Colors): PayTarget => ({
+  id: i.id, client: i.clientName, loanNo: i.loanNo, principal: i.principal, loanStart: i.loanStart,
+  number: i.number, of: i.installments, amount: i.amount, paidAt: null, paidAmt: null,
+  color: colors[i.loanId] ?? LOAN_COLORS[0],
+})
+const itemTarget = (l: Loan, i: Loan['items'][number], colors: Colors): PayTarget => ({
+  id: i.id, client: l.client.name, loanNo: l.number, principal: l.principal, loanStart: l.startDate.slice(0, 10),
+  number: i.number, of: l.items.length, amount: i.amount, paidAt: i.paidAt, paidAmt: i.paidAmt,
+  color: colors[l.id] ?? LOAN_COLORS[0],
+})
+
+/** Identifica un préstamo: color propio, número del cliente, monto y fecha de inicio. */
+function LoanTag({ color, no, principal, start }: { color: string; no: number; principal: number; start: string }) {
   return (
-    <div className="flex items-center gap-3 rounded-2xl bg-card border border-line p-4">
+    <span className="inline-flex items-center gap-1.5 text-[11px] text-mute">
+      <span className="size-2 rounded-full shrink-0" style={{ background: color }} aria-hidden="true" />
+      <span>
+        Préstamo #{no} · {cop(principal)} · {shortDate(start)}
+      </span>
+    </span>
+  )
+}
+
+function DueRow({ i, tone, colors, onPay }: { i: DueItem; tone: 'bad' | 'brand' | 'mute'; colors: Colors; onPay: (t: PayTarget) => void }) {
+  const color = tone === 'bad' ? 'text-bad' : tone === 'brand' ? 'text-brand-soft' : 'text-mute'
+  const c = colors[i.loanId] ?? LOAN_COLORS[0]
+  return (
+    <div className="flex items-center gap-3 rounded-2xl bg-card border border-line p-4 pl-3.5 border-l-[3px]" style={{ borderLeftColor: c }}>
       <div className="flex-1 min-w-0">
         <p className="font-medium truncate">{i.clientName}</p>
+        <LoanTag color={c} no={i.loanNo} principal={i.principal} start={i.loanStart} />
         <p className={`text-xs mt-0.5 ${color}`}>
           Cuota {i.number}/{i.installments} · {fmtDate(i.dueDate)}
         </p>
       </div>
       <p className="font-semibold tabular-nums">{cop(i.amount)}</p>
       <button
-        onClick={() => onPay(i.id)}
+        onClick={() => onPay(dueTarget(i, colors))}
         className="rounded-xl bg-ok/15 text-ok font-semibold text-sm px-4 py-2.5 active:scale-95"
       >
         Pagó
       </button>
     </div>
+  )
+}
+
+function PayDialog({
+  t,
+  onSave,
+  onUndo,
+  onClose,
+}: {
+  t: PayTarget
+  onSave: (id: string, amount: number, paidAt: string) => Promise<void>
+  onUndo: (id: string) => Promise<void>
+  onClose: () => void
+}) {
+  const editing = !!t.paidAt
+  const [date, setDate] = useState(t.paidAt ? paidDay(t.paidAt) : todayStr())
+  const [amount, setAmount] = useState(String(t.paidAmt ?? t.amount))
+  const [busy, setBusy] = useState(false)
+  const amt = Number(amount) || 0
+  async function run(fn: () => Promise<void>) {
+    setBusy(true)
+    try {
+      await fn()
+    } finally {
+      setBusy(false)
+    }
+  }
+  return (
+    <Sheet title={editing ? 'Editar pago' : 'Registrar pago'} onClose={onClose}>
+      <div className="space-y-4">
+        <div className="rounded-xl bg-field border border-edge p-3.5 space-y-1">
+          <p className="font-medium">{t.client}</p>
+          <LoanTag color={t.color} no={t.loanNo} principal={t.principal} start={t.loanStart} />
+          <p className="text-xs text-mute">
+            Cuota {t.number}/{t.of} · {cop(t.amount)}
+          </p>
+        </div>
+        <div>
+          <label className={labelCls} htmlFor="pay-date">Fecha en que pagó</label>
+          <input id="pay-date" type="date" className={inputCls} value={date} onChange={(e) => setDate(e.target.value)} />
+        </div>
+        <div>
+          <label className={labelCls} htmlFor="pay-amt">Monto recibido (COP)</label>
+          <input
+            id="pay-amt"
+            className={inputCls}
+            inputMode="numeric"
+            value={amount}
+            onChange={(e) => setAmount(e.target.value.replace(/\D/g, ''))}
+          />
+        </div>
+        <button
+          disabled={busy || !date || !amt}
+          onClick={() => run(() => onSave(t.id, amt, date))}
+          className="w-full rounded-xl bg-brand text-white font-semibold py-3 disabled:opacity-50"
+        >
+          {editing ? 'Guardar cambios' : 'Confirmar pago'}
+        </button>
+        {editing && (
+          <button disabled={busy} onClick={() => run(() => onUndo(t.id))} className="w-full text-bad text-sm py-2">
+            Deshacer pago
+          </button>
+        )}
+      </div>
+    </Sheet>
   )
 }
 
@@ -462,13 +595,13 @@ function Stat({
       </span>
       <div className="min-w-0">
         <p className="text-xs font-medium text-mute leading-snug">{label}</p>
-        <p className="text-[22px] font-extrabold leading-tight mt-1 tabular-nums truncate">{cop(value)}</p>
+        <p className="text-[clamp(16px,4.7vw,22px)] font-extrabold leading-tight mt-1 tabular-nums whitespace-nowrap">{cop(value)}</p>
       </div>
     </div>
   )
 }
 
-function TodayView({ dash, onPay }: { dash: Dashboard; onPay: (id: string) => void }) {
+function TodayView({ dash, colors, onPay }: { dash: Dashboard; colors: Colors; onPay: (t: PayTarget) => void }) {
   const empty = !dash.overdue.length && !dash.today.length
   return (
     <>
@@ -487,17 +620,17 @@ function TodayView({ dash, onPay }: { dash: Dashboard; onPay: (id: string) => vo
       )}
       {dash.overdue.length > 0 && (
         <Group title={`Vencidas (${dash.overdue.length})`} color="text-bad">
-          {dash.overdue.map((i) => <DueRow key={i.id} i={i} tone="bad" onPay={onPay} />)}
+          {dash.overdue.map((i) => <DueRow key={i.id} i={i} tone="bad" colors={colors} onPay={onPay} />)}
         </Group>
       )}
       {dash.today.length > 0 && (
         <Group title={`Hoy (${dash.today.length})`} color="text-brand-soft">
-          {dash.today.map((i) => <DueRow key={i.id} i={i} tone="brand" onPay={onPay} />)}
+          {dash.today.map((i) => <DueRow key={i.id} i={i} tone="brand" colors={colors} onPay={onPay} />)}
         </Group>
       )}
       {dash.upcoming.length > 0 && (
         <Group title="Próximas" color="text-mute">
-          {dash.upcoming.map((i) => <DueRow key={i.id} i={i} tone="mute" onPay={onPay} />)}
+          {dash.upcoming.map((i) => <DueRow key={i.id} i={i} tone="mute" colors={colors} onPay={onPay} />)}
         </Group>
       )}
     </>
@@ -515,11 +648,13 @@ function Group({ title, color, children }: { title: string; color: string; child
 
 function LoansView({
   loans,
+  colors,
   onPay,
   onDelete,
 }: {
   loans: Loan[]
-  onPay: (id: string, undo?: boolean) => void
+  colors: Colors
+  onPay: (t: PayTarget) => void
   onDelete: (id: string) => void
 }) {
   const [open, setOpen] = useState<string | null>(null)
@@ -531,15 +666,20 @@ function LoansView({
         const done = paid === l.items.length
         const isOpen = open === l.id
         return (
-          <div key={l.id} className="rounded-2xl bg-card border border-line overflow-hidden">
+          <div key={l.id} className="rounded-2xl bg-card border border-line border-l-[3px] overflow-hidden" style={{ borderLeftColor: colors[l.id] }}>
             <button onClick={() => setOpen(isOpen ? null : l.id)} className="w-full text-left p-4">
-              <div className="flex items-center justify-between">
-                <p className="font-medium">{l.client.name}</p>
+              <div className="flex items-center justify-between gap-2">
+                <p className="font-medium truncate">
+                  {l.client.name} <span className="text-mute font-normal">#{l.number}</span>
+                </p>
                 <span className={`text-xs px-2 py-1 rounded-full ${done ? 'bg-ok/15 text-ok' : 'bg-brand/15 text-brand-soft'}`}>
                   {done ? 'Finalizado' : `${paid}/${l.items.length} cuotas`}
                 </span>
               </div>
               <p className="text-xs text-mute mt-1">
+                Prestado el {shortDate(l.startDate)} · {l.items.length} cuotas cada {l.intervalDays} días
+              </p>
+              <p className="text-xs text-mute mt-0.5">
                 {cop(l.principal)} → {cop(l.total)} · {l.interestRate}%
               </p>
               <div className="mt-3 h-1.5 rounded-full bg-ink overflow-hidden">
@@ -554,11 +694,11 @@ function LoansView({
                     <span className="flex-1">{fmtDate(i.dueDate)}</span>
                     <span className="tabular-nums">{cop(i.amount)}</span>
                     {i.paidAt ? (
-                      <button onClick={() => onPay(i.id, true)} className="text-ok text-xs px-3 py-1.5 rounded-lg bg-ok/10">
-                        ✓ Pagada
+                      <button onClick={() => onPay(itemTarget(l, i, colors))} className="text-ok text-xs px-3 py-1.5 rounded-lg bg-ok/10" aria-label="Editar pago">
+                        ✓ {shortDate(paidDay(i.paidAt))}
                       </button>
                     ) : (
-                      <button onClick={() => onPay(i.id)} className="text-brand-soft text-xs px-3 py-1.5 rounded-lg bg-brand/10">
+                      <button onClick={() => onPay(itemTarget(l, i, colors))} className="text-brand-soft text-xs px-3 py-1.5 rounded-lg bg-brand/10">
                         Marcar
                       </button>
                     )}

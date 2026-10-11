@@ -22,6 +22,7 @@ export interface Loan {
   installments: number
   intervalDays: number
   startDate: string
+  number: number
   client: Client
   items: Installment[]
 }
@@ -31,6 +32,9 @@ export interface DueItem {
   amount: number
   dueDate: string
   loanId: string
+  loanNo: number
+  principal: number
+  loanStart: string
   installments: number
   clientName: string
   phone: string | null
@@ -86,7 +90,8 @@ export const api = {
     startDate: string
   }) => req<Loan>('/loans', 'POST', l),
   deleteLoan: (id: string) => req<{ ok: true }>(`/loans/${id}`, 'DELETE'),
-  pay: (id: string) => req<Installment>(`/installments/${id}/pay`, 'POST', {}),
+  pay: (id: string, o: { amount?: number; paidAt?: string } = {}) =>
+    req<Installment>(`/installments/${id}/pay`, 'POST', o),
   unpay: (id: string) => req<Installment>(`/installments/${id}/unpay`, 'POST', {}),
   pushKey: () => req<{ key: string | null; enabled: boolean }>('/push/key'),
   pushSubscribe: (sub: PushSubscriptionJSON) => req<{ ok: true }>('/push/subscribe', 'POST', sub),
