@@ -1,16 +1,25 @@
 @import 'tailwindcss';
 
 @theme {
-  --font-sans: 'Inter', system-ui, sans-serif;
-  --color-ink: #0b1220;
-  --color-card: #121a2b;
-  --color-card2: #1a2438;
-  --color-line: #243049;
-  --color-gold: #c9a24b;
-  --color-gold-soft: #e3c77e;
-  --color-mute: #8b97b1;
-  --color-ok: #34d399;
-  --color-bad: #f87171;
+  --font-sans: 'Inter', ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+  --color-ink: #080d17;
+  --color-surface: #0b111d;
+  --color-card: #0d1524;
+  --color-card-hover: #111d31;
+  --color-field: #0d1626;
+  --color-brand: #145bff;
+  --color-brand-bright: #2165ff;
+  --color-brand-soft: #6fa0ff;
+  --color-edge: #163b78;
+  --color-edge-strong: #1d4fa8;
+  --color-line: #1a2a45;
+  --color-ok: #9bea63;
+  --color-ok-dark: #173d2b;
+  --color-violet: #8a42ff;
+  --color-bad: #ff6b7a;
+  --color-fg: #f4f7ff;
+  --color-mute: #9aaac6;
+  --color-dim: #7285a6;
 }
 
 html,
@@ -20,8 +29,11 @@ body,
 }
 
 body {
+  margin: 0;
   background: var(--color-ink);
-  color: #e8ecf5;
+  background-image: radial-gradient(ellipse at 50% 0%, rgba(24, 69, 158, 0.14), transparent 55%);
+  background-attachment: fixed;
+  color: var(--color-fg);
   font-family: var(--font-sans);
   -webkit-tap-highlight-color: transparent;
   padding-top: env(safe-area-inset-top);
@@ -30,4 +42,21 @@ body {
 input,
 select {
   font-size: 16px; /* evita el zoom automático en iOS */
+}
+
+:focus-visible {
+  outline: 2px solid var(--color-brand-bright);
+  outline-offset: 2px;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  * {
+    transition: none !important;
+    animation: none !important;
+  }
+}
+
+/* el foco del campo de clave lo pinta su contenedor (label) */
+label input:focus-visible {
+  outline: none;
 }
